@@ -1,0 +1,347 @@
+<script>
+// ============================================================
+// SESSION MANAGEMENT
+// ============================================================
+const contact = sessionStorage.getItem('current_contact');
+if (!contact) { window.location.href = 'login.html'; }
+
+let customerId = null;
+let hasOrdered = false;
+let lastOrderQueueNumber = null;
+
+// ============================================================
+// LOAD USER
+// ============================================================
+async function loadUser() {
+    try {
+        const response = await fetch('/api/auth/customer/by-contact/' + contact);
+        const data = await response.json();
+        if (data.success) {
+            customerId = data.customer.id;
+            sessionStorage.setItem('current_customer_id', customerId);
+            document.getElementById('userNameDisplay').textContent = data.customer.firstName + ' ' + data.customer.lastName;
+        } else {
+            document.getElementById('userNameDisplay').textContent = 'Customer';
+            window.location.href = 'login.html';
+        }
+    } catch (error) {
+        console.error('Error loading user:', error);
+        document.getElementById('userNameDisplay').textContent = 'Customer';
+    }
+}
+
+// ============================================================
+// LOGOUT
+// ============================================================
+document.getElementById('logoutBtn').addEventListener('click', function(e) {
+    e.preventDefault();
+    if (confirm('Are you sure you want to logout?')) {
+        sessionStorage.removeItem('current_customer_id');
+        sessionStorage.removeItem('current_user_role');
+        sessionStorage.removeItem('current_contact');
+        window.location.href = 'index.html';
+    }
+});
+
+// ============================================================
+// UPDATE ORDER SUMMARY - FIXED
+// ============================================================
+function updateOrderSummary(orders) {
+    const summaryBox = document.getElementById('orderSummaryBox');
+    const content = document.getElementById('orderSummaryContent');
+    
+    // Filter out claimed orders
+    const activeOrders = orders.filter(o => o.status !== 'claimed');
+    
+    // ✅ ONLY SHOW IF MAY ACTIVE ORDER
+    if (!activeOrders || activeOrders.length === 0) {
+        summaryBox.classList.remove('show');
+        hasOrdered = false;
+        return;
+    }
+    
+    // Get the latest active order
+    const sorted = [...activeOrders].sort((a, b) => b.queueNumber - a.queueNumber);
+    const latest = sorted[0];
+    
+    // ✅ CHECK KUNG BAGO ANG ORDER OR SAME LANG
+    if (lastOrderQueueNumber === latest.queueNumber && hasOrdered) {
+        // Same order, just update the details
+    } else {
+        // New order detected
+        lastOrderQueueNumber = latest.queueNumber;
+        hasOrdered = true;
+    }
+    
+    let statusLabel = latest.status;
+    if (statusLabel === 'set_pricing') statusLabel = 'Set Pricing';
+    else if (statusLabel === 'to_wash') statusLabel = 'To Wash';
+    else if (statusLabel === 'to_dry') statusLabel = 'To Dry';
+    else if (statusLabel === 'to_iron') statusLabel = 'To Iron';
+    else if (statusLabel === 'to_fold') statusLabel = 'To Fold';
+    else if (statusLabel === 'for_pickup') statusLabel = 'For Pickup';
+    else if (statusLabel === 'to_deliver') statusLabel = 'To Deliver';
+    else if (statusLabel === 'pending') statusLabel = 'Pending';
+    else if (statusLabel === 'claimed') statusLabel = 'Claimed';
+    else statusLabel = latest.status.charAt(0).toUpperCase() + latest.status.slice(1);
+    
+    const weightDisplay = latest.weight > 0 ? latest.weight + ' kg' : '--';
+    const priceDisplay = latest.price > 0 ? '₱' + latest.price : '--';
+    
+    content.innerHTML = `
+        <div class="detail-row"><span class="label">Services</span><span class="value">${latest.services || 'N/A'}</span></div>
+        <div class="detail-row"><span class="label">Status</span><span class="value" style="color:${latest.status === 'set_pricing' ? '#b8860b' : latest.status === 'claimed' ? '#2e7d32' : '#1f6f8a'};">${statusLabel}</span></div>
+        <div class="detail-row"><span class="label">Weight</span><span class="value">${weightDisplay}</span></div>
+        <div class="detail-row"><span class="label">Price</span><span class="value">${priceDisplay}</span></div>
+    `;
+    summaryBox.classList.add('show');
+}
+
+// ============================================================
+// CART
+// ============================================================
+async function loadCart() {
+    if (!customerId) {
+        console.log('No customerId yet');
+        return;
+    }
+    try {
+        const response = await fetch('/api/orders/customer/' + customerId);
+        const data = await response.json();
+        
+        if (data.success) {
+            const allOrders = data.orders || [];
+            
+            // Filter out claimed orders for cart
+            const cartOrders = allOrders.filter(o => o.status !== 'claimed');
+            
+            cartOrders.sort((a, b) => a.queueNumber - b.queueNumber);
+            
+            document.getElementById('miniCartBadge').textContent = cartOrders.length;
+            renderCartModal(cartOrders);
+            
+            // ✅ UPDATE ORDER SUMMARY WITH ALL ORDERS (including claimed for history)
+            updateOrderSummary(allOrders);
+        } else {
+            console.error('Cart error:', data.message);
+        }
+    } catch (error) {
+        console.error('Error loading cart:', error);
+    }
+}
+
+function renderCartModal(orders) {
+    const list = document.getElementById('cartOrdersList');
+    if (orders.length === 0) {
+        list.innerHTML = '<div class="empty-cart">No active orders.</div>';
+        return;
+    }
+    let html = '';
+    orders.forEach(o => {
+        let statusLabel = o.status;
+        if (statusLabel === 'set_pricing') statusLabel = 'Set Pricing';
+        else if (statusLabel === 'to_wash') statusLabel = 'To Wash';
+        else if (statusLabel === 'to_dry') statusLabel = 'To Dry';
+        else if (statusLabel === 'to_iron') statusLabel = 'To Iron';
+        else if (statusLabel === 'to_fold') statusLabel = 'To Fold';
+        else if (statusLabel === 'for_pickup') statusLabel = 'For Pickup';
+        else if (statusLabel === 'to_deliver') statusLabel = 'To Deliver';
+        else if (statusLabel === 'pending') statusLabel = 'Pending';
+        else if (statusLabel === 'claimed') statusLabel = 'Claimed';
+        else statusLabel = o.status.charAt(0).toUpperCase() + o.status.slice(1);
+        
+        const weightDisplay = o.weight > 0 ? o.weight + ' kg' : '--';
+        const priceDisplay = o.price > 0 ? '₱' + o.price : '--';
+        
+        html += `
+            <div class="cart-item">
+                <div class="cart-info">
+                    <strong>${o.services}</strong>
+                    <br /><small style="color:#4f6f82;">${o.serviceType === 'pickup' ? 'Pick-up' : 'Deliver'} · ${o.createdAt}</small>
+                    <br /><small style="color:#4f6f82;">Weight: ${weightDisplay} | Price: ${priceDisplay}</small>
+                </div>
+                <span class="status-text">${statusLabel}</span>
+            </div>
+        `;
+    });
+    list.innerHTML = html;
+}
+
+// ============================================================
+// NOTIFICATIONS
+// ============================================================
+let notifications = [];
+
+async function loadNotifications() {
+    if (!customerId) return;
+    try {
+        const response = await fetch('/api/orders/customer/' + customerId);
+        const data = await response.json();
+        if (data.success) {
+            const notifyOrders = data.orders.filter(o => 
+                o.status === 'for_pickup' || o.status === 'to_deliver'
+            );
+            
+            notifications = notifyOrders.map(o => {
+                const msg = o.status === 'for_pickup' 
+                    ? `Your laundry is ready for pickup! (${o.services}) - Please claim at the shop.`
+                    : `Your laundry is on its way for delivery! (${o.services}) - Please wait for delivery.`;
+                return {
+                    id: o.id,
+                    message: msg,
+                    time: o.updatedAt || o.createdAt,
+                    services: o.services
+                };
+            });
+            
+            const badge = document.getElementById('notifBadge');
+            if (notifications.length > 0) {
+                badge.textContent = notifications.length;
+                badge.classList.add('show');
+            } else {
+                badge.classList.remove('show');
+            }
+            
+            if (document.getElementById('notifModal').classList.contains('show')) {
+                renderNotifications();
+            }
+        }
+    } catch (error) {
+        console.error('Error loading notifications:', error);
+    }
+}
+
+function renderNotifications() {
+    const list = document.getElementById('notifList');
+    if (notifications.length === 0) {
+        list.innerHTML = '<div class="notif-empty">No new notifications.</div>';
+        return;
+    }
+    let html = '';
+    notifications.forEach(n => {
+        html += `
+            <div class="notif-item">
+                <div class="notif-msg">${n.message}</div>
+                <div class="notif-time">${n.time || ''}</div>
+            </div>
+        `;
+    });
+    list.innerHTML = html;
+}
+
+// ============================================================
+// SUBMIT ORDER
+// ============================================================
+document.getElementById('submitOrderBtn').addEventListener('click', async function() {
+    const notif = document.getElementById('customerNotification');
+    if (!customerId) {
+        notif.className = 'notification-msg show error';
+        notif.innerHTML = '<i class="fas fa-exclamation-circle"></i> Please log in first.';
+        return;
+    }
+
+    const serviceType = document.querySelector('input[name="serviceType"]:checked');
+    const services = [];
+    document.querySelectorAll('#servicesGroup input[type="checkbox"]:checked').forEach(cb => services.push(cb.value));
+
+    if (!serviceType) {
+        notif.className = 'notification-msg show error';
+        notif.innerHTML = '<i class="fas fa-exclamation-circle"></i> Please select a service type.';
+        return;
+    }
+
+    if (services.length === 0) {
+        notif.className = 'notification-msg show error';
+        notif.innerHTML = '<i class="fas fa-exclamation-circle"></i> Select at least one service.';
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/orders/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                customerId: parseInt(customerId),
+                services: services.join(', '),
+                serviceType: serviceType.value
+            })
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            hasOrdered = true;
+            lastOrderQueueNumber = data.order.queueNumber;
+            
+            document.getElementById('popupMessage').textContent = 'Order submitted successfully! Queue #' + data.order.queueNumber;
+            document.getElementById('successPopup').classList.add('show');
+            
+            // Reset form
+            document.querySelectorAll('#servicesGroup input[type="checkbox"]').forEach(cb => cb.checked = false);
+            document.querySelectorAll('input[name="serviceType"]').forEach(cb => cb.checked = false);
+            
+            notif.className = 'notification-msg';
+            
+            // ✅ IMMEDIATELY LOAD UPDATED DATA
+            await loadCart();
+            await loadNotifications();
+        } else {
+            notif.className = 'notification-msg show error';
+            notif.innerHTML = '<i class="fas fa-exclamation-circle"></i> ' + data.message;
+        }
+    } catch (error) {
+        notif.className = 'notification-msg show error';
+        notif.innerHTML = '<i class="fas fa-exclamation-circle"></i> Network error. Please try again.';
+        console.error('Submit order error:', error);
+    }
+});
+
+// ============================================================
+// EVENT LISTENERS
+// ============================================================
+document.getElementById('miniCartIcon').addEventListener('click', function() {
+    document.getElementById('cartModal').classList.add('show');
+});
+
+document.getElementById('closeCartBtn').addEventListener('click', function() {
+    document.getElementById('cartModal').classList.remove('show');
+});
+
+document.getElementById('cartModal').addEventListener('click', function(e) {
+    if (e.target === this) { this.classList.remove('show'); }
+});
+
+document.getElementById('notifBell').addEventListener('click', function() {
+    renderNotifications();
+    document.getElementById('notifModal').classList.add('show');
+});
+
+document.getElementById('closeNotifBtn').addEventListener('click', function() {
+    document.getElementById('notifModal').classList.remove('show');
+});
+
+document.getElementById('notifModal').addEventListener('click', function(e) {
+    if (e.target === this) { this.classList.remove('show'); }
+});
+
+document.getElementById('popupOkBtn').addEventListener('click', function() {
+    document.getElementById('successPopup').classList.remove('show');
+});
+
+// ============================================================
+// AUTO-REFRESH EVERY 2 SECONDS
+// ============================================================
+setInterval(() => {
+    if (customerId) {
+        loadCart();
+        loadNotifications();
+    }
+}, 2000);
+
+// ============================================================
+// INIT
+// ============================================================
+loadUser().then(() => {
+    loadCart();
+    loadNotifications();
+});
+</script>
